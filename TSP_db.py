@@ -1,5 +1,8 @@
 import os
-import sqlite3
+import mysql.connector
+from mysql.connector import (connection)
+from mysql.connector import errorcode
+
 import sys
 import time
 from datetime import date
@@ -13,7 +16,14 @@ class Database:
     def __init__(self):
         self.tour = TSP_tools.Tour()
         # TODO: Swap to connecting to dwarf.ict & put this as the exception
-        self.connection = sqlite3.connect("tsp.db")
+        try:
+            self.connection = mysql.connector.connect(
+                user='s5151332', password='2maocDyT',
+                host='mysql.ict.griffith.edu.au',
+                database='s5151332db')
+        except mysql.connector.Error as err:
+            if err.errno == 2003:
+                raise Exception("You need to be connected to the Griffith VPN to connect to the database!")
         self.cursor = self.connection.cursor()
 
         self.problem_solved = False
@@ -25,51 +35,54 @@ class Database:
 
     def _create_database_if_not_exists(self):
         create_map = """
-            CREATE TABLE IF NOT EXISTS Maps
-            (
-              Name      VARCHAR(31) NOT NULL,
-              NodeCount INTEGER     NOT NULL,
-              CONSTRAINT pk PRIMARY KEY (Name)
-            );
-
+--
+-- Table structure for table 'Problem'
+--
+CREATE TABLE IF NOT EXISTS Problem (
+  Name varchar(32) NOT NULL,
+  Size int(11) NOT NULL,
+  Comment varchar(255) DEFAULT NULL,
+  CONSTRAINT PPK PRIMARY KEY (Name)
+);
 
         """
 
         self.cursor.execute(create_map)
 
         create_cities = """
-            CREATE TABLE IF NOT EXISTS Cities
-            (
-              MapName VARCHAR(31) NOT NULL,
-              "Index" INTEGER     NOT NULL,
-              x       DOUBLE      NOT NULL,
-              y       DOUBLE      NOT NULL,
+--
+-- Table structure for table 'Cities'
+--
+CREATE TABLE IF NOT EXISTS Cities (
+  Name varchar(32) NOT NULL,
+  ID int(11) NOT NULL,
+  x double NOT NULL,
+  y double NOT NULL,
+  CONSTRAINT CPK PRIMARY KEY (Name, ID),
+  CONSTRAINT PName FOREIGN KEY (Name) REFERENCES Problem (Name) ON DELETE CASCADE
+); 
 
-              CONSTRAINT MapName_FK FOREIGN KEY (MapName) REFERENCES Maps (Name),
-              CONSTRAINT TourPoints_PK PRIMARY KEY (MapName, "Index")
-            );
+
         """
 
         self.cursor.execute(create_cities)
 
         create_solutions = """
-            CREATE TABLE IF NOT EXISTS Solutions
-            (
-              -- Column with type INTEGER PRIMARY KEY auto increments
-              Identifier    INTEGER     NOT NULL,
-              MapName       VARCHAR(31) NOT NULL,
-              Distance      DOUBLE      NOT NULL,
-
-              IndexOrder    VARCHAR     NOT NULL,
-
-              RunTime       DOUBLE      NOT NULL,
-              Author        VARCHAR(31),
-              Date          DATE        NOT NULL,
-              AlgorithmUsed VARCHAR(15) NOT NULL,
-
-              CONSTRAINT Solutions_PK PRIMARY KEY (Identifier),
-              CONSTRAINT MapName_FK FOREIGN KEY (MapName) REFERENCES Maps (Name)
-            );
+--
+-- Table structure for table 'Solution'
+--
+CREATE TABLE IF NOT EXISTS Solution (
+  SolutionID int(11) NOT NULL AUTO_INCREMENT,
+  ProblemName varchar(32) NOT NULL,
+  TourLength double NOT NULL,
+  Date date DEFAULT NULL,
+  Author varchar(32) DEFAULT NULL,
+  Algorithm varchar(32) DEFAULT NULL,
+  RunningTime int(11) DEFAULT NULL,
+  Tour mediumtext NOT NULL,
+  CONSTRAINT SPK PRIMARY KEY (SolutionID),
+  CONSTRAINT SolPName FOREIGN KEY (ProblemName) REFERENCES Problem (Name) ON DELETE CASCADE
+);
         """
 
         self.cursor.execute(create_solutions)
@@ -77,7 +90,7 @@ class Database:
     def _problem_exists(self, problem_name):
         search = f"""
             SELECT Name
-            FROM Maps
+            FROM Problem
             WHERE Name = "{problem_name}"
         """
         self.cursor.execute(search)
@@ -89,27 +102,28 @@ class Database:
     def add_problem(self, problem_name, file_name):
         if self._problem_exists(problem_name):
             print("ERROR: That problem name is taken!")
-            return
+            return 1
 
         # Reuse find_nodes function instead of processing manually
         self.tour.find_nodes(file_name)
         insert_map = f"""
-            INSERT INTO Maps (Name, NodeCount)
-            VALUES ("{problem_name}",{len(self.tour)})
+            INSERT INTO Problem (Name, Size, Comment)
+            VALUES ("{problem_name}",{len(self.tour)}, "{self.tour.comment}")
         """
 
         self.cursor.execute(insert_map)
 
         for node in self.tour.route:
             insert_point = f"""
-                INSERT INTO Cities (MapName, "Index", x, y)
+                INSERT INTO Cities (Name, ID, x, y)
                 VALUES ("{problem_name}", {node.index}, {node.x},{node.y})
             """
 
             self.cursor.execute(insert_point)
         print("Added " + problem_name + " successfully")
+        return 0
 
-    def _save_tour_as_solution(self):
+    def save_tour_as_solution(self):
         if not self.problem_solved:
             return
         solution_string = ""
@@ -126,13 +140,14 @@ class Database:
                 author = "unknown"
 
         insert_solution = f"""
-            INSERT INTO Solutions (MapName, Distance, IndexOrder, RunTime, Author, Date, AlgorithmUsed)
-            VALUES ("{problem_name}", "{self.tour.get_dist()}", "{solution_string}","{self.run_time}",
+            INSERT INTO Solution (ProblemName, TourLength, Tour, RunningTime, Author, Date, Algorithm)
+            VALUES ("{self.problem_name}", "{self.tour.get_dist()}", "{solution_string}","{self.run_time}",
             "{author}","{date.today()}","{self.algorithm_name}")
         """
         self.cursor.execute(insert_solution)
+        print("Uploaded solution")
 
-    def _load_in_problem(self, problem_name):
+    def load_in_problem(self, problem_name):
         if self.problem_name == problem_name and not self.problem_solved:
             return
 
@@ -141,25 +156,31 @@ class Database:
         self.cursor.execute(f"""
             SELECT *
             FROM Cities 
-            WHERE MapName = "{problem_name}"
+            WHERE Name = "{problem_name}"
         """)
         self.tour.route.clear()
         for r in self.cursor.fetchall():
             self.tour.route.append(TSP_tools.Node(r[1], r[2], r[3]))
+        # Grab the comment
+        self.cursor.execute(f"""
+            SELECT Comment
+            FROM Problem
+            WHERE Name = "{problem_name}"
+        """)
+        self.tour.comment = self.cursor.fetchone()[0].rstrip()
 
     def solve(self, algorithm, problem_name, max_time):
         if not self._problem_exists(problem_name):
             print("That problem isn't in the database!")
             return
-        self._load_in_problem(problem_name)
+        self.load_in_problem(problem_name)
         self.algorithm_name = algorithm.__name__
         self.problem_solved = True
         self.run_time = algorithm(self.tour, time.perf_counter(), max_time)
-        self._save_tour_as_solution()
         print("Solved " + problem_name + " successfully")
 
     def solution_made_before(self, problem_name):
-        self.cursor.execute(f"SELECT * FROM Solutions WHERE MapName = '{problem_name}'")
+        self.cursor.execute(f"SELECT * FROM Solution WHERE ProblemName = '{problem_name}'")
         if self.cursor.fetchone():
             return True
         else:
@@ -168,7 +189,7 @@ class Database:
     def _tour_from_solution_string(self, solution_string, problem_name):
         if problem_name != self.problem_name or self.problem_solved:
             # Reload the problem
-            self._load_in_problem(problem_name)
+            self.load_in_problem(problem_name)
 
         tour_solution = TSP_tools.Tour()
         for index in solution_string.split():
@@ -179,52 +200,52 @@ class Database:
         """Returns a list of tours"""
         # This isn't required in the assignment, but seems like it could be useful
         if self.problem_name != problem_name:
-            self._load_in_problem(problem_name)
+            self.load_in_problem(problem_name)
         if not self.solution_made_before(problem_name):
             print("That problem hasn't been solved yet")
-            return
+            return 1
         solutions = []
         self.cursor.execute(f"""
             SELECT *
-            FROM Solutions
-            WHERE  MapName = "{problem_name}"
+            FROM Solution
+            WHERE  ProblemName = "{problem_name}"
         """)
         for r in self.cursor.fetchall():
-            new_solution = self._tour_from_solution_string(r[3], self.problem_name)
+            new_solution = self._tour_from_solution_string(r[7], self.problem_name)
             new_solution._last_measured = new_solution.route.copy()
-            new_solution._distance = r[1]
-            new_solution.author = r[5]
-            new_solution.date_solved = r[6]
-            new_solution.algorithm_used = r[7]
+            new_solution._distance = r[2]
+            new_solution.author = r[4]
+            new_solution.date_solved = r[3]
+            new_solution.algorithm_used = r[5]
             solutions.append(new_solution)
         return solutions
 
     def _load_in_solution_row(self, row):
-        solution_string = row[3]
+        solution_string = row[7]
         problem_name = row[1]
         if self.problem_name != problem_name:
-            self._load_in_problem(problem_name)
+            self.load_in_problem(problem_name)
         self.tour = self._tour_from_solution_string(solution_string, problem_name)
 
         self.tour._last_measured = self.tour.route.copy()
         self.tour._file_name = row[1]  # Not actually the file name, but the closest thing the db stores
         self.tour._distance = row[2]
-        self.tour.author = row[5]
-        self.tour.date_solved = row[6]
-        self.tour.algorithm_used = row[7]
+        self.tour.author = row[4]
+        self.tour.date_solved = row[3]
+        self.tour.algorithm_used = row[5]
 
     def fetch_solution(self, solution_number):
         # Not a necessary function, but could be useful
         self.cursor.execute(f"""
             SELECT *
-            FROM Solutions
-            WHERE Identifier = {solution_number}
+            FROM Solution
+            WHERE SolutionID = {solution_number}
         """)
         row = self.cursor.fetchone()
         if not row:
             print("ERROR: that problem ID doesn't exist")
             return
-        self._load_in_solution_row(self, row)
+        self._load_in_solution_row(row)
 
     def fetch_best_solution(self, problem_name):
         if not self.solution_made_before(problem_name):
@@ -233,9 +254,9 @@ class Database:
 
         self.cursor.execute(f"""
             SELECT *
-            FROM Solutions
-            WHERE MapName = '{problem_name}'
-            AND Distance = (SELECT MIN(Distance) FROM Solutions WHERE MapName = '{problem_name}')
+            FROM Solution
+            WHERE ProblemName = '{problem_name}'
+            AND TourLength = (SELECT MIN(TourLength) FROM Solution WHERE ProblemName = '{problem_name}')
         """)
         row = self.cursor.fetchone()
         self._load_in_solution_row(row)
@@ -257,7 +278,7 @@ if __name__ == '__main__':
     elif command == "solve":
         # Assuming simulated annealing for now
         max_time = int(sys.argv[3])
-        db.solve(TSP.simulated_annealing, problem_name, max_time)
+        db.solve(TSP.greedy, problem_name, max_time)
     elif command == "fetch":
         # This command actually means fetch best solution
         db.fetch_best_solution(problem_name)

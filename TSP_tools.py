@@ -1,5 +1,6 @@
 # Common tools used for multiple algorithms
 from math import sqrt
+import os
 
 
 class Node:
@@ -29,7 +30,8 @@ class Tour:
 
         self.run_time = 0
         self.date_solved = ""
-        self.algorithm_used = ""
+        self.algorithm_name = ""
+        self.comment = ""
 
     def __len__(self):
         """Overloads the len() function for readability"""
@@ -42,11 +44,18 @@ class Tour:
         # Get the file open
 
         self._file_name = file_name
-        file_path = "TSP_EUC/" + self._file_name
+        file_path = ''
+        if os.path.isabs(self._file_name):
+            file_path = self._file_name
+        else:
+            file_path = "TSP_EUC/" + self._file_name
         file = open(file_path, "r")
         # The coordinates always start on the 7th line so just skip to it
-        for i in range(6):
-            file.readline()
+        for line in file:
+            if "COMMENT" in line:
+                self.comment = line[10:-1]
+            elif "NODE_COORD_SECTION" in line:
+                break
 
         # Find all the nodes
         for line in file:
