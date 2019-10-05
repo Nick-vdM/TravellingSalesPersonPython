@@ -182,44 +182,46 @@ class textDropdown(wx.Panel):
         wx.Panel.__init__(self, parent, id)
         self.parent = parent
         self.id = id
+
         self.info = wx.StaticText(self, label=text)
+        self.info.SetFont(wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.NORMAL))
+
         height, width = parent.GetSize()
-        self.combo = wx.ComboBox(self, size=(width * 10, height * 1.1))
+        self.combo = wx.ComboBox(self, size=(width * 9, height * 1.2))
+        self.combo.SetFont(wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.NORMAL))
+
         height, width = self.combo.GetSize()
         self.infoButton = wx.Button(self, wx.ID_ANY, size=(width, width))
         self.infoButton.SetBitmapLabel(
             wx.ArtProvider.GetBitmap(wx.ART_INFORMATION, size=(width * 0.8, width * 0.8)))
-        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.sizer.Add(self.info, flag=wx.ALIGN_CENTRE_HORIZONTAL, border=10)
-        self.sizer.Add(self.combo, flag=wx.ALIGN_CENTRE_HORIZONTAL, border=5)
-        self.sizer.Add(self.infoButton)
-        self.infoButton.Bind(wx.EVT_BUTTON, self.showInfo)
-        self.SetSizer(self.sizer)
 
-    def showInfo(self):
-        """Launches a wxControl to show information"""
-        pass
+        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.sizer.Add(self.info, wx.ALIGN_CENTRE, border=5)
+        self.sizer.Add(self.combo, wx.EXPAND | wx.ALIGN_CENTRE, border=5)
+        self.sizer.Add(self.infoButton, wx.ALIGN_CENTRE, border=5)
+
+        self.SetSizer(self.sizer)
 
 
 class queryWindow(wx.Frame):
     """Runs a query and displays all the information"""
 
-    def __init__(self, title, query, parent=None, id=wx.ID_ANY):
-        wx.Frame.__init__(self, None, id, title)
+    def __init__(self, title, query, activateCommand, parent=None, id=wx.ID_ANY):
+        global plot, backend
+        wx.Frame.__init__(self, None, id, title, size=plot.GetSize())
+        self.activateCommand = activateCommand
 
         self.panel = wx.Panel(self, wx.ID_ANY)
-        global plot, backend
-        self.listCtrl = wx.ListCtrl(self.panel,
-                                    size=plot.GetSize(),
-                                    style=wx.LC_REPORT | wx.BORDER_SUNKEN)
-        self.sizer = wx.BoxSizer()
-        self.sizer.Add(self.listCtrl, wx.EXPAND)
+        self.listCtrl = wx.ListCtrl(self, size=plot.GetSize(), style=wx.LC_REPORT | wx.BORDER_SUNKEN)
+        self.sizer = wx.BoxSizer(wx.VERTICAL)
+        self.sizer.Add(self.listCtrl, 1, wx.EXPAND)
         self.panel.SetSizer(self.sizer)
 
         self.setTitles(query)
         self.addData()
 
         self.Bind(wx.EVT_CLOSE, self._closeWindow)
+        self.listCtrl.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._callCommandAndClose)
         self.Show()
 
     def setTitles(self, query):
@@ -238,9 +240,15 @@ class queryWindow(wx.Frame):
             for i in range(self.fieldCount):
                 self.listCtrl.SetItem(index, i, str(r[i]).strip())
             index += 1
+        for i in range(self.fieldCount):
+            self.listCtrl.SetColumnWidth(i, wx.LIST_AUTOSIZE_USEHEADER)
 
     def _closeWindow(self, event):
         # Event handlers pass an extra argument so define it like this
+        self.Destroy()
+
+    def _callCommandAndClose(self, event):
+        self.activateCommand(event)
         self.Destroy()
 
 
@@ -261,7 +269,12 @@ class loadProblem(textDropdown):
     def _loadProblem(self, event):
         global backend, plot
         backend.draw_lines = False
-        backend.load_in_problem(self.combo.GetValue())
+        if event.ClassName == 'wxListEvent':
+            problem = event.EventObject.GetItemText(event.GetIndex())
+            self.combo.SetValue(problem)
+        else:
+            problem = self.combo.GetValue()
+        backend.load_in_problem(problem)
         plot.update()
         self.parent.loadSolution.setList(self.combo.GetValue())
         backend.problem_name = self.combo.GetValue()
@@ -272,7 +285,7 @@ class loadProblem(textDropdown):
     def _onInfo(self, event):
         queryWindow("Problems list", """
         SELECT *
-        FROM Problem""")
+        FROM Problem""", self._loadProblem)
 
 
 class loadSolution(textDropdown):
@@ -302,7 +315,12 @@ class loadSolution(textDropdown):
     def _loadSolution(self, event):
         global backend, plot, info
         backend.draw_lines = True
-        ID = int(self.combo.GetValue().split(":")[0])
+        ID = ''
+        if event.ClassName == 'wxListEvent':
+            ID = event.EventObject.GetItemText(event.GetIndex())
+            self.combo.SetValue(ID)
+        else:
+            ID = int(self.combo.GetValue().split(":")[0])
         backend.fetch_solution(ID)
         plot.update()
         info.setSolution(problemName=backend.problem_name,
@@ -312,8 +330,9 @@ class loadSolution(textDropdown):
                          length=round(backend.tour.get_dist(), 3),
                          runtime=round(backend.run_time, 3),
                          algo=backend.algorithm_function.__name__,
-                         author=backend.author,
-                         date=backend.date)
+                         author=backend.tour.author,
+                         date=backend.tour.date_solved)
+        event.Skip()  # Lets wxListEvent close
 
     def _onInfo(self, event):
         global backend
@@ -321,11 +340,107 @@ class loadSolution(textDropdown):
             queryWindow("Solutions list", f"""
             SELECT *
             FROM Solution
-            WHERE ProblemName = {backend.problem_name}""")
+            WHERE ProblemName = '{backend.problem_name}'""", self._loadSolution)
         else:
             queryWindow("Solutions list", """
             SELECT *
-            FROM Solution""")
+            FROM Solution""", self._loadSolution)
+
+
+class labelAndSpin(wx.Panel):
+    def __init__(self, parent, text, defaultValue):
+        wx.Panel.__init__(self, parent, wx.ID_ANY)
+        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        self.label = wx.StaticText(self, label=text)
+        self.spin = wx.SpinCtrl(self)
+        self.spin.SetValue(defaultValue)
+
+        self.sizer.Add(self.label, wx.ALIGN_CENTRE_HORIZONTAL)
+        self.sizer.Add(self.spin, wx.ALIGN_CENTRE_HORIZONTAL)
+
+        self.SetSizer(self.sizer)
+
+
+class solveSettings(wx.Frame):
+    def __init__(self, parent, id=wx.ID_ANY):
+        global backend, plot
+        wx.Frame.__init__(self, parent, id, title="Solve Settings")
+        self.panel = wx.Panel(self, wx.EXPAND)
+        self.sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self.setTitle()
+        self.runTimeField = labelAndSpin(self.panel, "Run time", backend.max_time)
+        self.sizer.Add(self.runTimeField, 1, wx.ALIGN_CENTRE_HORIZONTAL)
+        self.initAlgoTitle(backend)
+        self.initRadioButtons(backend)
+        self.initApplyButton()
+
+        self.Bind(wx.EVT_CLOSE, self._onClose)
+
+        self.panel.SetSizer(self.sizer)
+        self.SetSize(plot.GetSize() / 2)
+        self.Show()
+
+    def setTitle(self):
+        self.title = wx.StaticText(self.panel, label="Solve Settings")
+        font = wx.Font(18, wx.DEFAULT, wx.NORMAL, wx.NORMAL)
+        self.title.SetFont(font)
+        self.sizer.Add(self.title, 1, wx.ALIGN_CENTRE_HORIZONTAL, border=30)
+
+    def initAlgoTitle(self, backend):
+        self.algoTitle = wx.StaticText(self.panel, label="Algorithm to Use")
+        font = wx.Font(14, wx.DEFAULT, wx.NORMAL, wx.NORMAL)
+        self.algoTitle.SetFont(font)
+        self.sizer.Add(self.algoTitle, 1, wx.ALIGN_CENTRE_HORIZONTAL)
+
+    def initRadioButtons(self, backend):
+        self.greedy = wx.RadioButton(self.panel, label="Greedy")
+        self.twoOpt = wx.RadioButton(self.panel, label="Two Opt")
+        self.simulatedAnnealing = wx.RadioButton(self.panel, label="Simulated Annealing")
+
+        self._setEnabledRadioButton(backend)
+        self._bindRadioButtons()
+        self.addRadioButtons()
+
+    def addRadioButtons(self):
+        self.sizer.Add(self.greedy, 1, wx.ALIGN_CENTRE_HORIZONTAL)
+        self.sizer.Add(self.twoOpt, 1, wx.ALIGN_CENTRE_HORIZONTAL)
+        self.sizer.Add(self.simulatedAnnealing, 1, wx.ALIGN_CENTRE_HORIZONTAL)
+
+    def _bindRadioButtons(self):
+        self.greedy.Bind(wx.EVT_RADIOBUTTON, lambda event: self._setBackendToFunction(event, TSP.greedy))
+        self.twoOpt.Bind(wx.EVT_RADIOBUTTON, lambda event: self._setBackendToFunction(event, TSP.two_opt))
+        self.simulatedAnnealing.Bind(
+            wx.EVT_RADIOBUTTON, lambda event: self._setBackendToFunction(event, TSP.simulated_annealing)
+        )
+
+    def _setEnabledRadioButton(self, backend):
+        if backend.algorithm_function == TSP.greedy:
+            self.greedy.SetValue(True)
+        elif backend.algorithm_function == TSP.two_opt:
+            self.twoOpt.SetValue(True)
+        else:
+            self.simulatedAnnealing.SetValue(True)
+
+    def initApplyButton(self):
+        # The button's own sizers works weirdly so give it its own panel
+        self.buttonPanel = wx.Panel(self.panel)
+        buttonSizer = wx.BoxSizer(wx.VERTICAL)
+        applyButton = wx.Button(self.buttonPanel, wx.ID_APPLY)
+        buttonSizer.Add(applyButton)
+        self.buttonPanel.SetSizer(buttonSizer)
+
+        self.sizer.Add(self.buttonPanel, 1, wx.ALIGN_CENTRE_HORIZONTAL, border=30)
+        applyButton.Bind(wx.EVT_BUTTON, self._onClose)
+
+    def _onClose(self, event):
+        backend.max_time = self.runTimeField.spin.GetValue()
+        self.Destroy()
+
+    def _setBackendToFunction(self, event, function):
+        global backend
+        backend.algorithm_function = function
 
 
 class solveButton(wx.Panel):
@@ -367,7 +482,98 @@ class solveButton(wx.Panel):
                          date=backend.date)
 
     def _onSettings(self, event):
-        pass
+        solveSettings(self)
+
+
+class inputField(wx.TextCtrl):
+    def __init__(self, parent, defaultField):
+        wx.TextCtrl.__init__(self, parent)
+        self.defaultField = defaultField
+        self.gray = '#848484'
+
+        self._changeToDefault()
+
+        self.Bind(wx.EVT_TEXT, self.changeModes)
+
+    def _changeToEdit(self):
+        font = wx.Font(10, wx.DEFAULT, wx.NORMAL, wx.NORMAL)
+        self.SetFont(font)
+        self.SetForegroundColour(wx.BLACK)
+        self.SetLabel('')
+
+    def _changeToDefault(self):
+        font = wx.Font(10, wx.DEFAULT, wx.FONTSTYLE_ITALIC, wx.NORMAL)
+        self.SetFont(font)
+        self.SetForegroundColour(self.gray)
+        self.SetLabel(self.defaultField)
+
+    def changeModes(self, event):
+        if self.GetForegroundColour() == self.gray:
+            self._changeToEdit()
+        elif not self.GetValue:
+            self.changeToDefault()
+
+    def setField(self, text):
+        # Sets the field to a non-instruction
+        if self.GetForegroundColour() == self.gray:
+            self._changeToEdit()
+        self.SetValue(text)
+
+
+class labelAndField(wx.Panel):
+    def __init__(self, parent, label, defaultText):
+        wx.Panel.__init__(self, parent, wx.ID_ANY)
+        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
+
+        self.label = wx.StaticText(self, label=label)
+        self.field = inputField(self, defaultText)
+
+        self.sizer.Add(self.label, wx.ALIGN_CENTRE_HORIZONTAL)
+        self.sizer.Add(self.field, wx.ALIGN_CENTRE_HORIZONTAL)
+
+        self.SetSizer(self.sizer)
+        self.Fit()
+
+
+class saveSettingsWindow(wx.Frame):
+    def __init__(self, parent, id=wx.ID_ANY):
+        global backend, plot
+        wx.Frame.__init__(self, parent, id, title="Save Solution Settings")
+        self.panel = wx.Panel(self)
+        self.sizer = wx.BoxSizer(wx.VERTICAL)
+
+        self.setTitle()
+        self.labelAndField = labelAndField(self.panel, "Author:", backend.author)
+        self.sizer.Add(self.labelAndField, 1, wx.ALIGN_CENTRE_HORIZONTAL)
+        self.initApplyButton()
+
+        self.Bind(wx.EVT_CLOSE, self._onClose)
+        self.panel.SetSizer(self.sizer)
+        self.Fit()
+        self.SetSize(plot.GetSize() / 2)
+        self.Show()
+
+    def setTitle(self):
+        self.title = wx.StaticText(self.panel, label="Save Solution Settings")
+        font = wx.Font(18, wx.DEFAULT, wx.NORMAL, wx.NORMAL)
+        self.title.SetFont(font)
+        self.sizer.Add(self.title, 1, wx.ALIGN_CENTRE_HORIZONTAL, border=30)
+
+    def initApplyButton(self):
+        # The button's own sizers works weirdly so give it its own panel
+        self.buttonPanel = wx.Panel(self.panel)
+        buttonSizer = wx.BoxSizer(wx.VERTICAL)
+        applyButton = wx.Button(self.buttonPanel, wx.ID_APPLY)
+        buttonSizer.Add(applyButton)
+        self.buttonPanel.SetSizer(buttonSizer)
+
+        self.sizer.Add(self.buttonPanel, 1, wx.ALIGN_CENTRE_HORIZONTAL, border=30)
+        applyButton.Bind(wx.EVT_BUTTON, self._onClose)
+
+    def _onClose(self, event):
+        global backend
+        backend.author = self.labelAndField.field.GetValue()
+        self.Destroy()
 
 
 class saveButton(wx.Panel):
@@ -382,7 +588,8 @@ class saveButton(wx.Panel):
 
         gear_icon = wx.Image("gear.png", wx.BITMAP_TYPE_ANY).Scale(width, width)
         gear_icon = wx.BitmapFromImage(gear_icon)
-        self.settingsButton = wx.BitmapButton(self, bitmap=gear_icon, size=(width, width), style=wx.BU_EXACTFIT)
+        self.settingsButton = wx.BitmapButton(self, bitmap=gear_icon,
+                                              size=(width, width), style=wx.BU_EXACTFIT)
 
         self.sizer.Add(self.saveButton)
         self.sizer.Add(self.settingsButton, flag=wx.RIGHT | wx.BOTTOM, border=10)
@@ -399,7 +606,7 @@ class saveButton(wx.Panel):
         self.parent.loadSolution.setList(backend.problem_name)
 
     def _onSettings(self, event):
-        pass
+        saveSettingsWindow(self)
 
 
 class sideMenu(wx.Panel):
@@ -442,7 +649,7 @@ class mainMenu(wx.Frame):
         info.setEmpty()
 
         self.rightSplitter.SplitHorizontally(self.menu, info)
-        self.rightSplitter.SetMinimumPaneSize(150)
+        self.rightSplitter.SetMinimumPaneSize(300)
         self.rightSplitter.SetSashPosition(300)
         self.rightSplitter.SetSashGravity(0.6)
 

@@ -20,7 +20,7 @@ class Database:
             self.connection = mysql.connector.connect(
                 user='s5151332', password='2maocDyT',
                 host='mysql.ict.griffith.edu.au',
-                database='s5151332db')
+                database='1810ICTdb')
         except mysql.connector.Error as err:
             if err.errno == 2003:
                 raise Exception("You need to be connected to the Griffith VPN to connect to the database!")
@@ -31,6 +31,16 @@ class Database:
         self.run_time = 0
         self.algorithm_name = ""
         self.author = ""
+
+        if not self.author:
+            try:
+                self.author = os.environ['COMPUTERNAME']
+            except:
+                try:
+                    self.author = os.environ['USER']
+                except:
+                    self.author = "Unknown"
+
         self.date = ""
 
         self._create_database_if_not_exists()
@@ -133,14 +143,6 @@ CREATE TABLE IF NOT EXISTS Solution (
             solution_string = solution_string + (str(city.index) + " ")
 
         # Sometimes you can't access a user's computer name or username
-        if not self.author:
-            try:
-                self.author = os.environ['COMPUTERNAME']
-            except:
-                try:
-                    self.author = os.environ['USER']
-                except:
-                    self.author = "unknown"
 
         self.date = str(date.today())
         insert_solution = f"""
@@ -171,21 +173,15 @@ CREATE TABLE IF NOT EXISTS Solution (
             FROM Problem
             WHERE Name = "{problem_name}"
         """)
-        self.tour.comment = self.cursor.fetchone()[0].rstrip()
+        self.tour.comment = self.cursor.fetchone()[0]
+        if self.tour.comment:
+            self.tour.comment = self.tour.comment.rstrip()
 
     def solve(self, algorithm, problem_name, max_time):
         if not self._problem_exists(problem_name):
             print("That problem isn't in the database!")
             return
         # Set variables
-        if not self.author:
-            try:
-                self.author = os.environ['COMPUTERNAME']
-            except:
-                try:
-                    self.author = os.environ['USER']
-                except:
-                    self.author = "unknown"
 
         self.date = str(date.today())
 
