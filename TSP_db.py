@@ -30,6 +30,8 @@ class Database:
         self.problem_name = ""
         self.run_time = 0
         self.algorithm_name = ""
+        self.author = ""
+        self.date = ""
 
         self._create_database_if_not_exists()
 
@@ -131,18 +133,20 @@ CREATE TABLE IF NOT EXISTS Solution (
             solution_string = solution_string + (str(city.index) + " ")
 
         # Sometimes you can't access a user's computer name or username
-        try:
-            author = os.environ['COMPUTERNAME']
-        except:
+        if not self.author:
             try:
-                author = os.environ['USER']
+                self.author = os.environ['COMPUTERNAME']
             except:
-                author = "unknown"
+                try:
+                    self.author = os.environ['USER']
+                except:
+                    self.author = "unknown"
 
+        self.date = str(date.today())
         insert_solution = f"""
             INSERT INTO Solution (ProblemName, TourLength, Tour, RunningTime, Author, Date, Algorithm)
             VALUES ("{self.problem_name}", "{self.tour.get_dist()}", "{solution_string}","{self.run_time}",
-            "{author}","{date.today()}","{self.algorithm_name}")
+            "{self.author}","{self.date}","{self.algorithm_name}")
         """
         self.cursor.execute(insert_solution)
         print("Uploaded solution")
@@ -173,6 +177,18 @@ CREATE TABLE IF NOT EXISTS Solution (
         if not self._problem_exists(problem_name):
             print("That problem isn't in the database!")
             return
+        # Set variables
+        if not self.author:
+            try:
+                self.author = os.environ['COMPUTERNAME']
+            except:
+                try:
+                    self.author = os.environ['USER']
+                except:
+                    self.author = "unknown"
+
+        self.date = str(date.today())
+
         self.load_in_problem(problem_name)
         self.algorithm_name = algorithm.__name__
         self.problem_solved = True

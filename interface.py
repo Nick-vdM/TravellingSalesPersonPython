@@ -96,7 +96,7 @@ class infoBox(wx.Panel):
         font.PointSize = 15
         self.info.SetFont(font)
         self.box = wx.BoxSizer()
-        self.box.Add(self.info, wx.ALIGN_TOP | wx.EXPAND, border=10)
+        self.box.Add(self.info, 1, wx.ALIGN_TOP | wx.EXPAND, border=10)
         self.setEmpty()
 
     def setSolution(self, problemName="", comment="", nodeCount="",
@@ -111,21 +111,23 @@ Runtime: {runtime}
 Algorithm: {algo}
 Author: {author}
 Date: {date}""")
-        self.parent.Update()
+        self.parent.Refresh()
         width, height = self.parent.GetSize()
-        self.parent.infoBox.info.Wrap(width)
+        global info
+        info.info.Wrap(width)
 
     def setProblem(self, problemName="", comment="", nodeCount=""):
         self.info.SetLabel(f"""Problem: {problemName}
 Comment: {comment}
 Nodes: {nodeCount}""")
-        self.parent.Update()
+        self.parent.Refresh()
         width, height = self.parent.GetSize()
-        self.parent.infoBox.info.Wrap(width)
+        global info
+        info.info.Wrap(width)
 
     def setEmpty(self):
         self.info.SetLabel("Load in a problem for details")
-        self.parent.Update()
+        self.parent.Refresh()
 
 
 class uploadButton(wx.Panel):
@@ -199,11 +201,55 @@ class textDropdown(wx.Panel):
         pass
 
 
+class queryWindow(wx.Frame):
+    """Runs a query and displays all the information"""
+
+    def __init__(self, title, query, parent=None, id=wx.ID_ANY):
+        wx.Frame.__init__(self, None, id, title)
+
+        self.panel = wx.Panel(self, wx.ID_ANY)
+        global plot, backend
+        self.listCtrl = wx.ListCtrl(self.panel,
+                                    size=plot.GetSize(),
+                                    style=wx.LC_REPORT | wx.BORDER_SUNKEN)
+        self.sizer = wx.BoxSizer()
+        self.sizer.Add(self.listCtrl, wx.EXPAND)
+        self.panel.SetSizer(self.sizer)
+
+        self.setTitles(query)
+        self.addData()
+
+        self.Bind(wx.EVT_CLOSE, self._closeWindow)
+        self.Show()
+
+    def setTitles(self, query):
+        global backend
+        backend.cursor.execute(query)
+        self.fieldCount = len(backend.cursor.description)
+        self.fieldNames = [title[0] for title in backend.cursor.description]
+        for i in range(self.fieldCount):
+            self.listCtrl.InsertColumn(i, self.fieldNames[i])
+
+    def addData(self):
+        global backend
+        index = 0
+        for r in backend.cursor.fetchall():
+            self.listCtrl.InsertItem(index, "")
+            for i in range(self.fieldCount):
+                self.listCtrl.SetItem(index, i, str(r[i]).strip())
+            index += 1
+
+    def _closeWindow(self, event):
+        # Event handlers pass an extra argument so define it like this
+        self.Destroy()
+
+
 class loadProblem(textDropdown):
     def __init__(self, parent, id=wx.ID_ANY):
         textDropdown.__init__(self, parent, id, "Problem: ")
         self.combo.Bind(wx.EVT_COMBOBOX, self._loadProblem)
         self.combo.Bind(wx.EVT_TEXT_ENTER, self._loadProblem)
+        self.infoButton.Bind(wx.EVT_BUTTON, self._onInfo)
         self.setList()
 
     def setList(self):
@@ -219,8 +265,14 @@ class loadProblem(textDropdown):
         plot.update()
         self.parent.loadSolution.setList(self.combo.GetValue())
         backend.problem_name = self.combo.GetValue()
-        self.parent.infoBox.setProblem(backend.problem_name,
-                                       backend.tour.comment, len(backend.tour))
+        global info
+        info.setProblem(backend.problem_name,
+                        backend.tour.comment, len(backend.tour))
+
+    def _onInfo(self, event):
+        queryWindow("Problems list", """
+        SELECT *
+        FROM Problem""")
 
 
 class loadSolution(textDropdown):
@@ -228,6 +280,7 @@ class loadSolution(textDropdown):
         textDropdown.__init__(self, parent, id, "Solution: ")
         self.combo.Bind(wx.EVT_COMBOBOX, self._loadSolution)
         self.combo.Bind(wx.EVT_TEXT_ENTER, self._loadSolution)
+        self.infoButton.Bind(wx.EVT_BUTTON, self._onInfo)
         self.combo.Enable(False)
         self.combo.SetValue(text="Select a problem first")
 
@@ -247,11 +300,32 @@ class loadSolution(textDropdown):
             self.combo.Append(string)
 
     def _loadSolution(self, event):
-        global backend, plot
+        global backend, plot, info
         backend.draw_lines = True
         ID = int(self.combo.GetValue().split(":")[0])
         backend.fetch_solution(ID)
         plot.update()
+        info.setSolution(problemName=backend.problem_name,
+                         comment=backend.tour.comment,
+                         nodeCount=len(backend.tour),
+                         solutionId=ID,
+                         length=round(backend.tour.get_dist(), 3),
+                         runtime=round(backend.run_time, 3),
+                         algo=backend.algorithm_function.__name__,
+                         author=backend.author,
+                         date=backend.date)
+
+    def _onInfo(self, event):
+        global backend
+        if backend.problem_name:
+            queryWindow("Solutions list", f"""
+            SELECT *
+            FROM Solution
+            WHERE ProblemName = {backend.problem_name}""")
+        else:
+            queryWindow("Solutions list", """
+            SELECT *
+            FROM Solution""")
 
 
 class solveButton(wx.Panel):
@@ -277,13 +351,20 @@ class solveButton(wx.Panel):
         self.Fit()
 
     def _onSolve(self, event):
-        global backend, plot
+        global backend, plot, info
         backend.solve(backend.algorithm_function,
                       backend.problem_name, backend.max_time)
-
         backend.draw_lines = True
         plot.update()
-
+        info.setSolution(problemName=backend.problem_name,
+                         comment=backend.tour.comment,
+                         nodeCount=len(backend.tour),
+                         solutionId='Save for id',
+                         length=round(backend.tour.get_dist(), 3),
+                         runtime=round(backend.run_time, 3),
+                         algo=backend.algorithm_function.__name__,
+                         author=backend.author,
+                         date=backend.date)
 
     def _onSettings(self, event):
         pass
@@ -317,7 +398,6 @@ class saveButton(wx.Panel):
         backend.save_tour_as_solution()
         self.parent.loadSolution.setList(backend.problem_name)
 
-
     def _onSettings(self, event):
         pass
 
@@ -335,8 +415,6 @@ class sideMenu(wx.Panel):
         self.solveButton = solveButton(self)
         self.saveButton = saveButton(self)
         self.line = wx.StaticLine(self, -1, style=wx.HORIZONTAL)
-        self.infoBox = infoBox(self)
-        self.infoBox.setEmpty()
 
         self.sizer.Add(self.title, 1, wx.CENTRE, 10)
         self.sizer.Add(self.uploadButton, 1, wx.CENTRE, 10)
@@ -345,23 +423,40 @@ class sideMenu(wx.Panel):
         self.sizer.Add(self.solveButton, 1, wx.CENTRE, 10)
         self.sizer.Add(self.saveButton, 1, wx.CENTRE, 10)
         self.sizer.Add(self.line, 0, wx.ALL | wx.EXPAND)
-        self.sizer.Add(self.infoBox, 0, wx.LEFT, 10)
         self.SetSizer(self.sizer)
 
 
 class mainMenu(wx.Frame):
     def __init__(self, parent=None, id=wx.ID_ANY, title="Travelling Salesperson Visualiser"):
         wx.Frame.__init__(self, parent, id, title)
-        self.SetMinSize((1000, 600))
+        self.SetMinSize((800, 600))
         self.parent = parent
         self.id = id
 
-        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.mainSplitter = wx.SplitterWindow(self, style=wx.SP_BORDER)
+        self.rightSplitter = wx.SplitterWindow(self.mainSplitter, style=wx.SP_BORDER)
+
+        self.menu = sideMenu(self.rightSplitter)
+        global info
+        info = infoBox(self.rightSplitter)
+        info.setEmpty()
+
+        self.rightSplitter.SplitHorizontally(self.menu, info)
+        self.rightSplitter.SetMinimumPaneSize(150)
+        self.rightSplitter.SetSashPosition(300)
+        self.rightSplitter.SetSashGravity(0.6)
+
         global plot
-        plot = Plot(self)
-        self.sizer.Add(plot, flag=wx.LEFT | wx.EXPAND)
-        self.sizer.Add(sideMenu(self), 200, wx.EXPAND)
-        self.SetSizer(self.sizer)
+        plot = Plot(self.mainSplitter)
+
+        self.mainSplitter.SplitVertically(plot, self.rightSplitter)
+        self.mainSplitter.SetMinimumPaneSize(300)
+        self.mainSplitter.SetSashPosition(800 * 0.7)
+        self.mainSplitter.SetSashGravity(0.7)
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.mainSplitter, 1, wx.EXPAND)
+        self.SetSizer(sizer)
 
         self.Fit()
         self.Show()
@@ -370,6 +465,7 @@ class mainMenu(wx.Frame):
 # Make backend a global variable
 backend = Backend()
 plot = 0  # plot panel to be defined
+info = 0  # information panel
 
 if __name__ == "__main__":
     app = wx.App()
