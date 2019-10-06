@@ -18,7 +18,6 @@ class Backend(TSP_db.Database):
         self._load_all_problems()
 
         self.solution_rows = []
-        solution_lengths = []
 
     def _load_all_problems(self):
         query = """
@@ -102,15 +101,15 @@ class infoBox(wx.Panel):
     def setSolution(self, problemName="", comment="", nodeCount="",
                     solutionId="", length="",
                     runtime="", algo="", author="", date=""):
-        self.info.SetLabel(f"""Problem: {problemName}
-Comment: {comment}
-Nodes: {nodeCount}
-Solution ID: {solutionId}
-Length: {length}
-Runtime: {runtime}
-Algorithm: {algo}
-Author: {author}
-Date: {date}""")
+        self.info.SetLabel(f"""PROBLEM: {problemName}
+COMMENT: {comment}
+NODES: {nodeCount}
+SOLUTION ID: {solutionId}
+LENGTH: {length}
+RUNTIME: {runtime}
+ALGORITHM: {algo}
+AUTHOR: {author}
+DATE: {date}""")
         self.parent.Refresh()
         width, height = self.parent.GetSize()
         global info
@@ -118,8 +117,8 @@ Date: {date}""")
 
     def setProblem(self, problemName="", comment="", nodeCount=""):
         self.info.SetLabel(f"""Problem: {problemName}
-Comment: {comment}
-Nodes: {nodeCount}""")
+COMMENT: {comment}
+NODES: {nodeCount}""")
         self.parent.Refresh()
         width, height = self.parent.GetSize()
         global info
@@ -144,51 +143,74 @@ class uploadButton(wx.Panel):
 
     def _onButton(self, event):
         """Bring up the load file interface"""
+        self.stillRunning = True  # In case the user ends before naming the file
         print("Launched problem select dialogue")
-        frame = wx.Frame(None, wx.ID_ANY, "Upload")
-        filepath = self._getFile(frame)
-        problemName = self._getName(frame)
-        backend.add_problem(problemName, filepath)
-        frame.Destroy()
-        # Reload problem list
-        self.parent.loadProblem.setList()
+        self.frame = wx.Frame(None, wx.ID_ANY, "Upload")
+        filepath = self._getFile()
+        if self.stillRunning:
+            problemName = self._getName()
+            if len(problemName) != 0:  # if one was given
+                backend.add_problem(problemName, filepath)
+                # Reload problem list
+                self.parent.loadProblem.setList()
+        self.frame.Destroy()
 
-    def _getFile(self, frame):
+    def _getFile(self):
         """Opens a prompt to pick a file"""
         # TODO: on event close situations; otherwise _onButton will
         # keep running
-        openFileDialog = wx.FileDialog(frame, "Open", "", "",
-                                       "TSP files (*.tsp)|*.tsp",
-                                       wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
-        openFileDialog.ShowModal()
-        path = openFileDialog.GetPath()
+        self.openFileDialog = wx.FileDialog(self.frame, "Open", "", "",
+                                            "TSP files (*.tsp)|*.tsp",
+                                            wx.FD_OPEN | wx.FD_FILE_MUST_EXIST)
+        self.openFileDialog.ShowModal()
+        path = self.openFileDialog.GetPath()
         global backend
-        openFileDialog.Destroy()
+        self.openFileDialog.Destroy()
+        if len(path) == 0:
+            self.stillRunning = False  # User must've cancelled or closed
         return path
 
-    def _getName(self, frame):
-        fileNameDlg = wx.TextEntryDialog(frame, "Pick a file name",
+    def _getName(self):
+        fileNameDlg = wx.TextEntryDialog(self.frame, "Pick a file name",
                                          "Name picker")
+        string = ''
         if wx.ID_OK == fileNameDlg.ShowModal():
             string = fileNameDlg.GetValue()
             fileNameDlg.Destroy()
-            return string
+
+        # Prompt loop until the name is acceptable
+        while backend.problem_exists(string) and len(string) != 0:
+            fileNameDlg = wx.TextEntryDialog(self.frame, "That name already exists! "
+                                                         "Please choose again",
+                                             "Name picker")
+            if wx.ID_OK == fileNameDlg.ShowModal():
+                string = fileNameDlg.GetValue()
+                fileNameDlg.Destroy()
+            # If its blank assume the person gave up
+            if len(string) == 0:
+                break
+
+        return string
+
+    def _onClose(self, event):
+        # Means the user closed at the file dialogue so cancel the next dialogue
+        self.openFileDialog.Destroy()
+        self.stillRunning = False
 
 
 class textDropdown(wx.Panel):
     """Combines a static text and dropdown"""
 
     def __init__(self, parent, id=wx.ID_ANY, text=""):
-        wx.Panel.__init__(self, parent, id)
+        wx.Panel.__init__(self, parent, id, style=wx.BORDER_DEFAULT)
+        self.MaxSize = (250, 300)
         self.parent = parent
         self.id = id
 
         self.info = wx.StaticText(self, label=text)
-        self.info.SetFont(wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.NORMAL))
 
         height, width = parent.GetSize()
-        self.combo = wx.ComboBox(self, size=(width * 9, height * 1.2))
-        self.combo.SetFont(wx.Font(12, wx.DEFAULT, wx.NORMAL, wx.NORMAL))
+        self.combo = wx.ComboBox(self, size=(width * 9, height * 1.1))
 
         height, width = self.combo.GetSize()
         self.infoButton = wx.Button(self, wx.ID_ANY, size=(width, width))
@@ -196,9 +218,11 @@ class textDropdown(wx.Panel):
             wx.ArtProvider.GetBitmap(wx.ART_INFORMATION, size=(width * 0.8, width * 0.8)))
 
         self.sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.sizer.Add(self.info, wx.ALIGN_CENTRE, border=5)
-        self.sizer.Add(self.combo, wx.EXPAND | wx.ALIGN_CENTRE, border=5)
-        self.sizer.Add(self.infoButton, wx.ALIGN_CENTRE, border=5)
+        # These alignment flags just straight up don't work
+        self.sizer.Add(self.info, 1, wx.ALIGN_CENTRE_VERTICAL, border=5)
+        self.sizer.Add(self.combo, 1, wx.ALIGN_CENTRE_VERTICAL, border=5)
+        self.sizer.Add(self.infoButton, 0.25,
+                       wx.ALIGN_CENTRE_VERTICAL, border=5)
 
         self.SetSizer(self.sizer)
 
@@ -209,6 +233,7 @@ class queryWindow(wx.Frame):
     def __init__(self, title, query, activateCommand, parent=None, id=wx.ID_ANY):
         global plot, backend
         wx.Frame.__init__(self, None, id, title, size=plot.GetSize())
+        self.Bind(wx.EVT_SIZE, self.resize)
         self.activateCommand = activateCommand
 
         self.panel = wx.Panel(self, wx.ID_ANY)
@@ -223,6 +248,13 @@ class queryWindow(wx.Frame):
         self.Bind(wx.EVT_CLOSE, self._closeWindow)
         self.listCtrl.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._callCommandAndClose)
         self.Show()
+
+    def resize(self, event):
+        width, height = self.GetSize()
+        # Scroll bars add some width. This is the size in windows 10
+        width -= 16
+        height -= 38
+        self.listCtrl.SetSize(width, height)
 
     def setTitles(self, query):
         global backend
@@ -285,7 +317,8 @@ class loadProblem(textDropdown):
     def _onInfo(self, event):
         queryWindow("Problems list", """
         SELECT *
-        FROM Problem""", self._loadProblem)
+        FROM Problem
+        ORDER BY Size, Name""", self._loadProblem)
 
 
 class loadSolution(textDropdown):
@@ -340,11 +373,13 @@ class loadSolution(textDropdown):
             queryWindow("Solutions list", f"""
             SELECT *
             FROM Solution
-            WHERE ProblemName = '{backend.problem_name}'""", self._loadSolution)
+            WHERE ProblemName = '{backend.problem_name}'
+            ORDER BY ProblemName, TourLength""", self._loadSolution)
         else:
             queryWindow("Solutions list", """
             SELECT *
-            FROM Solution""", self._loadSolution)
+            FROM Solution
+            ORDER BY ProblemName, TourLength""", self._loadSolution)
 
 
 class labelAndSpin(wx.Panel):
@@ -353,6 +388,7 @@ class labelAndSpin(wx.Panel):
         self.sizer = wx.BoxSizer(wx.HORIZONTAL)
 
         self.label = wx.StaticText(self, label=text)
+        self.label.SetFont(wx.Font(14, wx.DEFAULT, wx.NORMAL, wx.NORMAL))
         self.spin = wx.SpinCtrl(self)
         self.spin.SetValue(defaultValue)
 
@@ -639,6 +675,10 @@ class mainMenu(wx.Frame):
         self.SetMinSize((800, 600))
         self.parent = parent
         self.id = id
+        try:
+            self.SetIcon(wx.Icon("favicon.png"))
+        except:
+            print("Failed to set icon. Maybe favicon.png isn't in the file?")
 
         self.mainSplitter = wx.SplitterWindow(self, style=wx.SP_BORDER)
         self.rightSplitter = wx.SplitterWindow(self.mainSplitter, style=wx.SP_BORDER)

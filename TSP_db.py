@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS Solution (
 
         self.cursor.execute(create_solutions)
 
-    def _problem_exists(self, problem_name):
+    def problem_exists(self, problem_name):
         search = f"""
             SELECT Name
             FROM Problem
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS Solution (
             return False
 
     def add_problem(self, problem_name, file_name):
-        if self._problem_exists(problem_name):
+        if self.problem_exists(problem_name):
             print("ERROR: That problem name is taken!")
             return 1
 
@@ -178,7 +178,7 @@ CREATE TABLE IF NOT EXISTS Solution (
             self.tour.comment = self.tour.comment.rstrip()
 
     def solve(self, algorithm, problem_name, max_time):
-        if not self._problem_exists(problem_name):
+        if not self.problem_exists(problem_name):
             print("That problem isn't in the database!")
             return
         # Set variables
